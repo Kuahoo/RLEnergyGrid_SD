@@ -1,0 +1,11 @@
+# Overlay for CSU TIDE L40 batch/JupyterHub jobs (see docs/context/TIDE.md)
+device: cuda
+tide:
+  image: pytorch-notebook
+  gpu_type: L40
+  cpus: 8
+  mem_gb: 32
+  gpus_per_job: 1
+  notes: >
+    Default TIDE interactive shape is 8-core CPU, 32 GB RAM, 1x L40.
+    Higher-end A100 (GPU-Advanced) is less available — do not request unless needed.

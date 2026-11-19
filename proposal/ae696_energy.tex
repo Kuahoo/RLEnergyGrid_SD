@@ -1,0 +1,117 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{hyperref}
+
+\definecolor{SDSUDarkRed}{HTML}{A6192E}
+\hypersetup{colorlinks=true,urlcolor=SDSUDarkRed,linkcolor=SDSUDarkRed,
+  pdftitle={AE 696 Project Proposal},pdfauthor={Kaho Tran and Deepanshu Zade}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\setlist[itemize]{leftmargin=1.35em,itemsep=2pt,topsep=3pt,parsep=0pt}
+\titleformat{\section}{\normalsize\bfseries}{}{0pt}{}
+\titlespacing*{\section}{0pt}{9pt}{3pt}
+
+\begin{document}
+
+\begin{center}
+{\large\bfseries\color{SDSUDarkRed} AE 696 Project Proposal}\\[3pt]
+Reinforcement Learning with AI Applications in Engineering\\
+Dr. Jun Chen \quad | \quad Fall 2026
+\end{center}
+
+\textbf{Project title:} Risk-Aware Reinforcement Learning for Resilient Microgrid Dispatch under SDG\&E Tariffs and Wildfire Power Shutoffs\\
+\textbf{Student name(s) and SDSU email(s):} Kaho Tran (\href{mailto:Ktran5546@sdsu.edu}{Ktran5546@sdsu.edu}), Deepanshu Zade (\href{mailto:Dzade6584@sdsu.edu}{Dzade6584@sdsu.edu})
+
+\section*{1. Engineering Problem and Objective}
+Communities in East County San Diego (e.g., Ramona and Alpine) face a dual energy challenge: some of the highest retail Time-of-Use (TOU) electricity rates in the nation under San Diego Gas \& Electric (SDG\&E), and recurring Public Safety Power Shutoff (PSPS) events during high-wind wildfire conditions. Under SDG\&E's Schedule TOU-DR1, summer on-peak prices (4:00 PM--9:00 PM) reach \$0.691/kWh compared to \$0.374/kWh during super off-peak hours. While solar-plus-storage microgrids allow prosumers to reduce daily bills via peak-price arbitrage and maintain backup power during outages, these two objectives conflict: discharging the battery during the evening peak maximizes financial savings but leaves the system depleted if a multi-day PSPS blackout occurs overnight. Furthermore, once islanded from the grid, the controller must dynamically ration stored energy by shedding non-critical loads to keep critical loads (e.g., refrigeration, medical gear, communications) online across variable solar days.
+
+Learning through sequential interaction via Reinforcement Learning (RL) is ideally suited here because the controller must make multi-step decisions under stochastic solar irradiance, volatile demand, and probabilistic outage forecasts without relying on computationally expensive mixed-integer linear programming at every step. Our team's contributions will be: (1) building a custom Gymnasium microgrid simulator integrating real San Diego solar/load traces, SDG\&E Schedule TOU-DR1 tariffs, and stochastic PSPS outage transitions; (2) designing a risk-aware reward function balancing economic arbitrage against blackout survival and load-shedding penalties; and (3) comparing continuous-control RL algorithms (PPO and SAC) against greedy economic and conservative rule-based baselines.
+
+\section*{2. Preliminary MDP or POMDP Formulation}
+The problem is formulated as a discrete-time Markov Decision Process (MDP) with an hourly time step ($\Delta t = 1.0\text{ h}$):
+
+\begin{itemize}
+  \item \textbf{State and observation:} The fully observable continuous state vector is $s_t \in \mathbb{R}^9$:
+  \begin{equation*}
+    s_t = \left[\text{SoC}_t,\, P_{\text{crit},t},\, P_{\text{flex},t},\, P_{\text{pv},t},\, c_{\text{buy},t},\, g_t,\, \rho_t,\, \sin\left(\frac{2\pi h_t}{24}\right),\, \cos\left(\frac{2\pi h_t}{24}\right)\right]
+  \end{equation*}
+  where $\text{SoC}_t \in [0.1, 0.95]$ is the Battery State of Charge (nominal capacity $E_{\text{nom}} = 27.0\text{ kWh}$, equivalent to two residential storage units); $P_{\text{crit},t} \in [0, 4]\text{ kW}$ is must-serve critical load; $P_{\text{flex},t} \in [0, 8]\text{ kW}$ is curtailable non-critical load (HVAC, water heating); $P_{\text{pv},t} \in [0, 8]\text{ kW}$ is solar PV generation; $c_{\text{buy},t} \in [0.374, 0.691]\text{ \$/kWh}$ is the active SDG\&E TOU-DR1 rate; $g_t \in \{0, 1\}$ is the binary grid connection status ($1 = \text{grid-tied}$, $0 = \text{islanded outage}$); $\rho_t \in [0, 1]$ is the 24-hour wildfire PSPS outage warning probability; and $h_t \in \{0, \dots, 23\}$ is the hour of day.
+
+  \item \textbf{Action:} The agent commands a 2D continuous action $a_t = [u_{\text{batt},t},\, u_{\text{shed},t}] \in [-1, 1] \times [0, 1]$:
+  \begin{itemize}
+    \item $u_{\text{batt},t} \in [-1, 1]$ commands battery power $P_{\text{batt},t} = u_{\text{batt},t} \cdot P_{\text{max}}$ ($P_{\text{max}} = 10.0\text{ kW}$; $P_{\text{batt},t} > 0$ discharges, $P_{\text{batt},t} < 0$ charges).
+    \item $u_{\text{shed},t} \in [0, 1]$ specifies the fraction of non-critical load $P_{\text{flex},t}$ curtailed to conserve energy.
+  \end{itemize}
+
+  \item \textbf{Reward:} At each step, total served load is $P_{\text{served},t} = P_{\text{crit},t} + (1 - u_{\text{shed},t})P_{\text{flex},t}$, and net grid demand is $P_{\text{net},t} = P_{\text{served},t} - P_{\text{pv},t} - P_{\text{batt},t}$. The reward function is:
+  \begin{equation*}
+    R_t = -\Big( g_t \cdot C_{\text{grid}}(P_{\text{net},t}) + c_{\text{deg}}|P_{\text{batt},t}|\Delta t + w_{\text{flex}}(u_{\text{shed},t} P_{\text{flex},t}\Delta t) + w_{\text{crit}} L_{\text{crit},t} \Big)
+  \end{equation*}
+  where $C_{\text{grid}}(P_{\text{net},t}) = c_{\text{buy},t}\max(P_{\text{net},t}, 0)\Delta t - c_{\text{sell}}\max(-P_{\text{net},t}, 0)\Delta t$ is the net SDG\&E electricity cost ($c_{\text{sell}} = \$0.05/\text{kWh}$ net billing export credit); $c_{\text{deg}} = \$0.02/\text{kWh}$ penalizes battery cycle wear; $w_{\text{flex}} = \$1.50/\text{kWh}$ penalizes flexible load curtailment; and $w_{\text{crit}} = \$25.00/\text{kWh}$ heavily penalizes unmet critical load $L_{\text{crit},t} = \max(P_{\text{crit},t} - P_{\text{avail},t}, 0)\Delta t$ during islanded blackouts ($g_t = 0$).
+  \begin{itemize}
+    \item \emph{Safety Constraints:} Low-level battery management clips $P_{\text{batt},t}$ so $\text{SoC}_{t+1}$ remains strictly within $[0.1, 0.95]$, and grid import/export is clamped to zero when $g_t = 0$.
+  \end{itemize}
+
+  \item \textbf{Dynamics and episodes:} Transition dynamics are unknown to the agent. Battery state updates via $\text{SoC}_{t+1} = \text{SoC}_t - (P_{\text{batt},t}\Delta t / E_{\text{nom}})\eta^{\text{sign}(P_{\text{batt},t})}$ with efficiency $\eta = 0.95$. Grid status $g_{t+1}$ transitions via a two-state Markov chain driven by $\rho_t$ (calibrated to CPUC historical 24-to-48-hour PSPS shutoffs). Episodes span 7 days ($T = 168\text{ hours}$) with initial $\text{SoC}_0 \sim \mathcal{U}(0.3, 0.8)$ and discount factor $\gamma = 0.99$.
+\end{itemize}
+
+\section*{3. Method and Implementation Plan}
+\begin{itemize}
+  \item \textbf{RL Algorithms:} Proximal Policy Optimization (PPO) will serve as the primary algorithm due to its stability in bounded 2D continuous action spaces with stochastic reward spikes. We will also implement Soft Actor-Critic (SAC) as an off-policy continuous control comparison.
+  \item \textbf{Baselines:}
+  \begin{enumerate}
+    \item \emph{Economic-Only Heuristic (Risk-Blind):} Maximizes daily TOU arbitrage by charging during super off-peak/solar hours and discharging during 4:00 PM--9:00 PM, ignoring $\rho_t$.
+    \item \emph{Conservative Reserve Rule:} Locks the battery into 100\% backup reserve mode and halts TOU discharging whenever the outage warning exceeds $\rho_t \ge 0.25$.
+  \end{enumerate}
+  \item \textbf{Environment, Data, and Computing:} We will build a custom Gymnasium environment (\texttt{SDGEMicrogridPSPS-v0}) in Python using Stable-Baselines3 and PyTorch. Hourly AC solar output will be sourced from NREL PVWatts for East County San Diego, paired with DOE OpenEI TMY3 San Diego residential appliance load profiles (splitting interior equipment/lighting into $P_{\text{crit}}$ and HVAC/water heating into $P_{\text{flex}}$) and SDG\&E Schedule TOU-DR1 tariffs. Training will run on local laptops and Google Colab GPUs.
+\end{itemize}
+
+\section*{4. Evaluation Plan}
+\begin{itemize}
+  \item \textbf{Metrics:}
+  \begin{enumerate}
+    \item \emph{Critical Load Survival Rate (\%):} Percentage of critical demand ($P_{\text{crit}}$) met during islanded PSPS blackout hours (primary engineering objective).
+    \item \emph{Weekly Net Economic Cost (\$):} Total SDG\&E grid expenditure plus battery degradation cost across normal and outage-prone weeks.
+    \item \emph{Flexible Load Curtailment Ratio (\%):} Percentage of non-critical load shed during outage warnings and events.
+  \end{enumerate}
+  \item \textbf{Protocol:} Both PPO and SAC will be trained for $5 \times 10^5$ time steps across 5 independent random seeds. Frozen policies will be evaluated without exploration noise across 20 held-out test episodes per seed (10 normal operating weeks and 10 high-risk Santa Ana wind PSPS weeks).
+  \item \textbf{Comparison and outputs:} All controllers will be tested on identical solar, load, and outage sequences. Outputs will include: (1) multi-seed learning curves (mean return $\pm 1$ std dev); (2) a 72-hour dispatch trajectory plot showing SoC, PV, and load shedding before and during a simulated blackout; and (3) a comparative metric table. We hypothesize that RL will maintain $>98\%$ critical load survival during outages while reducing normal-week electricity bills by $>15\%$ relative to the conservative baseline.
+\end{itemize}
+
+\section*{5. Milestones, Responsibilities, and Backup Plan}
+\begin{itemize}
+  \item \textbf{Milestones:}
+  \begin{itemize}
+    \item \emph{Weeks 9--10:} Preprocess NREL PVWatts and OpenEI San Diego CSVs; build and test the \texttt{SDGEMicrogridPSPS-v0} environment and rule-based baselines.
+    \item \emph{Weeks 11--12:} Train initial PPO and SAC agents; tune reward weights ($w_{\text{crit}}, w_{\text{flex}}$); complete course progress check-in.
+    \item \emph{Weeks 13--14:} Execute 5-seed training runs and 20-episode frozen evaluations; conduct reward sensitivity analysis and generate plots.
+    \item \emph{Week 15:} Finalize statistical comparisons, presentation slides, and final report.
+  \end{itemize}
+  \item \textbf{Team Responsibilities:}
+  \begin{itemize}
+    \item \emph{Kaho Tran:} Data pipeline preprocessing (NREL PVWatts \& OpenEI San Diego load profiles), custom Gymnasium environment dynamics (\texttt{SDGEMicrogridPSPS-v0}), rule-based baseline implementation, and PPO training/tuning.
+    \item \emph{Deepanshu Zade:} Stochastic PSPS Markov outage modeling, reward function shaping and sensitivity analysis, SAC agent implementation/tuning, multi-seed evaluation pipeline, and trajectory visualization plots.
+  \end{itemize}
+  \item \textbf{Technical Risk and Backup Plan:} The main risk is reward variance from infrequent PSPS blackouts causing the agent to either ignore outage warnings or shed flexible load prematurely. \emph{Backup Plan:} If 2D continuous policy convergence stalls, we will either (1) discretize the action space into 6 fixed operating modes and train a Deep Q-Network (DQN), or (2) fix $g_t = 1$ to focus on grid-tied SDG\&E TOU solar-plus-storage arbitrage.
+\end{itemize}
+
+\section*{6. References and Disclosure}
+\begin{itemize}
+  \item \textbf{References:}
+  \begin{enumerate}
+    \item San Diego Gas \& Electric (SDG\&E), \emph{Schedule TOU-DR1: Residential Time-of-Use Service (Effective August 1, 2026) \& 2026 PSPS Pre-Season Report}, 2026. Available: \url{https://www.sdge.com/total-electric-rates}.
+    \item National Renewable Energy Laboratory (NREL), \emph{PVWatts Calculator -- San Diego County Hourly Solar Data}, \url{https://pvwatts.nrel.gov/}.
+    \item U.S. Department of Energy (OpenEI), \emph{Commercial and Residential Hourly Load Profiles for all TMY3 Locations in the United States (San Diego Lindbergh Field)}, DOI: 10.25984/1788456, \url{https://data.openei.org/submissions/153}.
+    \item J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, ``Proximal Policy Optimization Algorithms,'' \emph{arXiv preprint arXiv:1707.06347}, 2017.
+    \item A. Raffin et al., ``Stable-Baselines3: Reliable Reinforcement Learning Implementations,'' \emph{Journal of Machine Learning Research}, vol. 22, no. 268, pp. 1--8, 2021.
+  \end{enumerate}
+  \item \textbf{AI Assistance Disclosure:} Large Language Model (LLM) assistance was used during project ideation, MDP equation formatting, and LaTeX template structuring. Both team members (Kaho Tran and Deepanshu Zade) have reviewed the plan.
+\end{itemize}
+
+\end{document}
